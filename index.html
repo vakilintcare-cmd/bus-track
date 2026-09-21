@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>School Bus Live Tracking</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    html, body, #map {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #e5e3df;
+    }
+    
+    /* Top Bar */
+    .top-bar {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(10px);
+      border-radius: 14px;
+      padding: 10px 16px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.15);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .top-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #1a1a1a;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #e8f5e9;
+      color: #2e7d32;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      background: #2e7d32;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.9); opacity: 1; }
+      50% { transform: scale(1.4); opacity: 0.5; }
+      100% { transform: scale(0.9); opacity: 1; }
+    }
+
+    /* Floating Action Controls */
+    .floating-controls {
+      position: absolute;
+      right: 14px;
+      top: 75px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .btn-circle {
+      width: 44px;
+      height: 44px;
+      background: #ffffff;
+      border: none;
+      border-radius: 50%;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 18px;
+      transition: transform 0.15s;
+    }
+    .btn-circle:active {
+      transform: scale(0.92);
+    }
+
+    /* Bottom Info Card */
+    .bottom-card {
+      position: absolute;
+      bottom: 16px;
+      left: 12px;
+      right: 12px;
+      max-width: 480px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 18px;
+      padding: 16px 18px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+      z-index: 1000;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .bus-name {
+      font-size: 17px;
+      font-weight: 800;
+      color: #111;
+    }
+    .status-pill {
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 12px;
+    }
+    .status-running {
+      background: #e8f5e9;
+      color: #1b5e20;
+    }
+    .status-stopped {
+      background: #ffebee;
+      color: #b71c1c;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+      background: #f8f9fa;
+      padding: 10px 12px;
+      border-radius: 12px;
+    }
+    .info-item {
+      display: flex;
+      flex-direction: column;
+    }
+    .info-label {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .info-value {
+      font-size: 14px;
+      font-weight: 700;
+      color: #222;
+    }
+
+    .address-box {
+      font-size: 12px;
+      color: #555;
+      line-height: 1.4;
+      margin-bottom: 12px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .btn-directions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      background: #1a73e8;
+      color: #ffffff;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 12px;
+      border-radius: 12px;
+      box-shadow: 0 3px 10px rgba(26, 115, 232, 0.3);
+      transition: background 0.15s;
+    }
+    .btn-directions:active {
+      background: #1557b0;
+    }
+
+    /* Bus Marker Styling */
+    .bus-marker-container {
+      width: 44px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fbc02d;
+      border: 3px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+      font-size: 22px;
+      transition: transform 0.3s ease-out;
+    }
+
+    /* Loading Overlay */
+    #loading {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(255,255,255,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+    .spinner {
+      width: 46px;
+      height: 46px;
+      border: 4px solid #e0e0e0;
+      border-top-color: #1a73e8;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+      margin-bottom: 14px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Loading Screen -->
+  <div id="loading">
+    <div class="spinner"></div>
+    <div style="font-size: 15px; font-weight: 700; color: #333;">Connecting to School Bus GPS...</div>
+    <div style="font-size: 12px; color: #777; margin-top: 5px;">Loading live Google Maps view</div>
+  </div>
+
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <div class="top-title">
+      <span>🚌</span>
+      <span id="header-title">School Bus Live</span>
+    </div>
+    <div class="live-badge">
+      <div class="live-dot"></div>
+      <span>LIVE</span>
+    </div>
+  </div>
+
+  <!-- Map Container -->
+  <div id="map"></div>
+
+  <!-- Floating Map Controls -->
+  <div class="floating-controls">
+    <button class="btn-circle" id="btn-layer" title="Toggle Google Satellite / Roadmap">🗺️</button>
+    <button class="btn-circle" id="btn-recenter" title="Center on Bus">🎯</button>
+  </div>
+
+  <!-- Bottom Details Card -->
+  <div class="bottom-card">
+    <div class="card-header">
+      <div class="bus-name" id="card-bus-name">Loading Bus...</div>
+      <div class="status-pill status-running" id="card-status">RUNNING</div>
+    </div>
+
+    <div class="info-grid">
+      <div class="info-item">
+        <span class="info-label">Speed</span>
+        <span class="info-value" id="card-speed">0 km/h</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Last Updated</span>
+        <span class="info-value" id="card-time">Just now</span>
+      </div>
+    </div>
+
+    <div class="address-box" id="card-address">
+      Locating vehicle on map...
+    </div>
+
+    <a href="#" target="_blank" class="btn-directions" id="btn-directions">
+      <span>📍</span>
+      <span>Get Directions in Google Maps</span>
+    </a>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    // Extract token from URL (?token=... or ?accessToken=...)
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || params.get('accessToken');
+
+    if (!token) {
+      document.getElementById('loading').innerHTML = `
+        <div style="text-align:center; padding: 20px;">
+          <h3 style="color:#d32f2f; margin-bottom: 8px;">Invalid Tracking Link</h3>
+          <p style="color:#555; font-size:14px;">This link appears to be incomplete or expired.<br>Please use the link sent on WhatsApp.</p>
+        </div>
+      `;
+    }
+
+    // Google Maps Tile Layers
+    const googleRoadmap = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+      maxZoom: 20,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+      attribution: '&copy; Google Maps'
+    });
+
+    const googleSatellite = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+      maxZoom: 20,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+      attribution: '&copy; Google Maps'
+    });
+
+    // Initialize Map with Google Roadmap by default
+    const map = L.map('map', {
+      zoomControl: false,
+      layers: [googleRoadmap]
+    }).setView([25.615, 81.633], 15);
+
+    let currentLayer = 'roadmap';
+    document.getElementById('btn-layer').addEventListener('click', () => {
+      if (currentLayer === 'roadmap') {
+        map.removeLayer(googleRoadmap);
+        map.addLayer(googleSatellite);
+        currentLayer = 'satellite';
+        document.getElementById('btn-layer').textContent = '🛰️';
+      } else {
+        map.removeLayer(googleSatellite);
+        map.addLayer(googleRoadmap);
+        currentLayer = 'roadmap';
+        document.getElementById('btn-layer').textContent = '🗺️';
+      }
+    });
+
+    // Custom School Bus Marker
+    const busIcon = L.divIcon({
+      className: 'custom-bus-icon',
+      html: '<div class="bus-marker-container">🚌</div>',
+      iconSize: [44, 44],
+      iconAnchor: [22, 22]
+    });
+
+    let busMarker = null;
+    let lastLat = null;
+    let lastLng = null;
+    let hasCentered = false;
+
+    // Recenter Button
+    document.getElementById('btn-recenter').addEventListener('click', () => {
+      if (lastLat && lastLng) {
+        map.flyTo([lastLat, lastLng], 16, { duration: 1 });
+      }
+    });
+
+    // Fetch Live Coordinates from Millitrack API
+    async function updateBusLocation() {
+      if (!token) return;
+
+      try {
+        const apiUrl = `https://live6.tpgpstrack.com/api/liveLocation/getDevicesInfo?accessToken=${encodeURIComponent(token)}`;
+        const res = await fetch(apiUrl);
+        if (!res.ok) throw new Error('Network error');
+
+        const json = await res.json();
+        if (!json.successful || !json.object || json.object.length === 0) {
+          throw new Error('Device not found or link expired');
+        }
+
+        const dev = json.object[0];
+        const lat = dev.latitude;
+        const lng = dev.longitude;
+        const speed = Math.round(dev.speed || 0);
+        const name = dev.name || 'School Bus';
+        const address = dev.address || 'Location unavailable';
+        const isRunning = dev.attributes && dev.attributes.currentStatus === 'RUNNING';
+
+        lastLat = lat;
+        lastLng = lng;
+
+        // Hide Loading Screen
+        document.getElementById('loading').style.display = 'none';
+
+        // Update UI
+        document.getElementById('header-title').textContent = name;
+        document.getElementById('card-bus-name').textContent = name;
+        document.getElementById('card-speed').textContent = `${speed} km/h`;
+        document.getElementById('card-address').textContent = address;
+
+        const statusElem = document.getElementById('card-status');
+        if (isRunning || speed > 2) {
+          statusElem.textContent = 'RUNNING';
+          statusElem.className = 'status-pill status-running';
+        } else {
+          statusElem.textContent = 'STOPPED';
+          statusElem.className = 'status-pill status-stopped';
+        }
+
+        // Format Last Update Time
+        const now = new Date();
+        document.getElementById('card-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        // Update Directions Link
+        document.getElementById('btn-directions').href = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+
+        // Update Map Marker
+        if (!busMarker) {
+          busMarker = L.marker([lat, lng], { icon: busIcon }).addTo(map);
+          map.setView([lat, lng], 16);
+          hasCentered = true;
+        } else {
+          busMarker.setLatLng([lat, lng]);
+          if (!hasCentered) {
+            map.panTo([lat, lng]);
+          }
+        }
+
+      } catch (err) {
+        console.error('Error fetching live location:', err);
+      }
+    }
+
+    // Initial call & poll every 4 seconds for real-time motion
+    updateBusLocation();
+    setInterval(updateBusLocation, 4000);
+  </script>
+</body>
+</html>
