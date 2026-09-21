@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>School Bus Live Tracking</title>
   
-  <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Fast, High-Reliability Leaflet CDN via Cloudflare -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   
   <style>
     * {
@@ -216,12 +217,14 @@
     #loading {
       position: absolute;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(255,255,255,0.92);
+      background: rgba(255,255,255,0.95);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       z-index: 2000;
+      padding: 24px;
+      text-align: center;
     }
     .spinner {
       width: 46px;
@@ -235,15 +238,26 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+    .retry-btn {
+      margin-top: 16px;
+      background: #1a73e8;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Loading Screen -->
+  <!-- Loading / Status Overlay -->
   <div id="loading">
-    <div class="spinner"></div>
-    <div style="font-size: 15px; font-weight: 700; color: #333;">Connecting to School Bus GPS...</div>
-    <div style="font-size: 12px; color: #777; margin-top: 5px;">Loading live Google Maps view</div>
+    <div class="spinner" id="loading-spinner"></div>
+    <div id="loading-title" style="font-size: 16px; font-weight: 700; color: #333;">Connecting to School Bus GPS...</div>
+    <div id="loading-sub" style="font-size: 13px; color: #666; margin-top: 6px;">Loading live Google Maps view</div>
   </div>
 
   <!-- Top Bar -->
@@ -261,7 +275,7 @@
   <!-- Map Container -->
   <div id="map"></div>
 
-  <!-- Floating Map Controls -->
+  <!-- Floating Controls -->
   <div class="floating-controls">
     <button class="btn-circle" id="btn-layer" title="Toggle Google Satellite / Roadmap">🗺️</button>
     <button class="btn-circle" id="btn-recenter" title="Center on Bus">🎯</button>
@@ -295,21 +309,50 @@
     </a>
   </div>
 
-  <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
   <script>
-    // Extract token from URL (?token=... or ?accessToken=...)
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token') || params.get('accessToken');
+    // Extract token robustly from search params, hash, or raw URL
+    function extractToken() {
+      const fullUrl = window.location.href;
+      const match = fullUrl.match(/[?&#](?:token|accessToken)=([^&#]+)/);
+      if (!match) return null;
+      let raw = match[1];
+      try {
+        raw = decodeURIComponent(raw);
+      } catch (e) {}
+      // Ensure '+' characters in base64/JWT are restored if unencoded
+      return raw.replace(/ /g, '+');
+    }
+
+    const token = extractToken();
+
+    function showError(title, message, showFallback) {
+      const loading = document.getElementById('loading');
+      loading.style.display = 'flex';
+      let html = `
+        <div style="font-size: 42px; margin-bottom: 12px;">⚠️</div>
+        <div style="font-size: 17px; font-weight: 800; color: #d32f2f; margin-bottom: 8px;">${title}</div>
+        <div style="font-size: 13px; color: #555; max-width: 320px; line-height: 1.5;">${message}</div>
+        <button class="retry-btn" onclick="location.reload()">🔄 Retry</button>
+      `;
+      if (showFallback && token) {
+        html += `
+          <div style="margin-top: 14px;">
+            <a href="https://live6.tpgpstrack.com/modern/#/livetracking?accessToken=${encodeURIComponent(token)}" 
+               style="color: #1a73e8; font-size: 13px; font-weight: 600; text-decoration: underline;">
+               Open in Standard Live View
+            </a>
+          </div>
+        `;
+      }
+      loading.innerHTML = html;
+    }
 
     if (!token) {
-      document.getElementById('loading').innerHTML = `
-        <div style="text-align:center; padding: 20px;">
-          <h3 style="color:#d32f2f; margin-bottom: 8px;">Invalid Tracking Link</h3>
-          <p style="color:#555; font-size:14px;">This link appears to be incomplete or expired.<br>Please use the link sent on WhatsApp.</p>
-        </div>
-      `;
+      showError(
+        "No Bus Selected",
+        "This live tracker requires a valid bus link.<br>Please open the link sent in your WhatsApp bus group.",
+        false
+      );
     }
 
     // Google Maps Tile Layers
@@ -325,7 +368,7 @@
       attribution: '&copy; Google Maps'
     });
 
-    // Initialize Map with Google Roadmap by default
+    // Initialize Map with Google Roadmap
     const map = L.map('map', {
       zoomControl: false,
       layers: [googleRoadmap]
@@ -346,7 +389,6 @@
       }
     });
 
-    // Custom School Bus Marker
     const busIcon = L.divIcon({
       className: 'custom-bus-icon',
       html: '<div class="bus-marker-container">🚌</div>',
@@ -358,82 +400,106 @@
     let lastLat = null;
     let lastLng = null;
     let hasCentered = false;
+    let failCount = 0;
 
-    // Recenter Button
     document.getElementById('btn-recenter').addEventListener('click', () => {
       if (lastLat && lastLng) {
         map.flyTo([lastLat, lastLng], 16, { duration: 1 });
       }
     });
 
-    // Fetch Live Coordinates from Millitrack API
+    // Fetch from Primary Endpoint, with Secondary Fallback
+    async function fetchGPSData() {
+      const endpoints = [
+        `https://live6.tpgpstrack.com/api/liveLocation/getDevicesInfo?accessToken=${encodeURIComponent(token)}`,
+        `https://mvts6.millitrack.com/api/liveLocation/getDevicesInfo?accessToken=${encodeURIComponent(token)}`
+      ];
+
+      for (const url of endpoints) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 7000);
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(timer);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.successful && data.object && data.object.length > 0) {
+              return data.object[0];
+            }
+          }
+        } catch (e) {
+          console.warn('Endpoint failed:', url, e);
+        }
+      }
+      return null;
+    }
+
     async function updateBusLocation() {
       if (!token) return;
 
-      try {
-        const apiUrl = `https://live6.tpgpstrack.com/api/liveLocation/getDevicesInfo?accessToken=${encodeURIComponent(token)}`;
-        const res = await fetch(apiUrl);
-        if (!res.ok) throw new Error('Network error');
+      const dev = await fetchGPSData();
 
-        const json = await res.json();
-        if (!json.successful || !json.object || json.object.length === 0) {
-          throw new Error('Device not found or link expired');
+      if (!dev) {
+        failCount++;
+        // If initial load fails, show error overlay
+        if (!lastLat && failCount >= 2) {
+          showError(
+            "GPS Link Expired or Offline",
+            "Could not connect to the bus tracking server. The link may have expired, or the bus GPS may be off.",
+            true
+          );
         }
+        return;
+      }
 
-        const dev = json.object[0];
-        const lat = dev.latitude;
-        const lng = dev.longitude;
-        const speed = Math.round(dev.speed || 0);
-        const name = dev.name || 'School Bus';
-        const address = dev.address || 'Location unavailable';
-        const isRunning = dev.attributes && dev.attributes.currentStatus === 'RUNNING';
+      failCount = 0;
+      const lat = dev.latitude;
+      const lng = dev.longitude;
+      const speed = Math.round(dev.speed || 0);
+      const name = dev.name || 'School Bus';
+      const address = dev.address || 'Location unavailable';
+      const isRunning = dev.attributes && dev.attributes.currentStatus === 'RUNNING';
 
-        lastLat = lat;
-        lastLng = lng;
+      lastLat = lat;
+      lastLng = lng;
 
-        // Hide Loading Screen
-        document.getElementById('loading').style.display = 'none';
+      // Hide Loading Screen once first GPS position arrives
+      document.getElementById('loading').style.display = 'none';
 
-        // Update UI
-        document.getElementById('header-title').textContent = name;
-        document.getElementById('card-bus-name').textContent = name;
-        document.getElementById('card-speed').textContent = `${speed} km/h`;
-        document.getElementById('card-address').textContent = address;
+      // Update UI Labels
+      document.getElementById('header-title').textContent = name;
+      document.getElementById('card-bus-name').textContent = name;
+      document.getElementById('card-speed').textContent = `${speed} km/h`;
+      document.getElementById('card-address').textContent = address;
 
-        const statusElem = document.getElementById('card-status');
-        if (isRunning || speed > 2) {
-          statusElem.textContent = 'RUNNING';
-          statusElem.className = 'status-pill status-running';
-        } else {
-          statusElem.textContent = 'STOPPED';
-          statusElem.className = 'status-pill status-stopped';
-        }
+      const statusElem = document.getElementById('card-status');
+      if (isRunning || speed > 2) {
+        statusElem.textContent = 'RUNNING';
+        statusElem.className = 'status-pill status-running';
+      } else {
+        statusElem.textContent = 'STOPPED';
+        statusElem.className = 'status-pill status-stopped';
+      }
 
-        // Format Last Update Time
-        const now = new Date();
-        document.getElementById('card-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const now = new Date();
+      document.getElementById('card-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      document.getElementById('btn-directions').href = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
 
-        // Update Directions Link
-        document.getElementById('btn-directions').href = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
-
-        // Update Map Marker
-        if (!busMarker) {
-          busMarker = L.marker([lat, lng], { icon: busIcon }).addTo(map);
-          map.setView([lat, lng], 16);
+      // Update Map Position
+      if (!busMarker) {
+        busMarker = L.marker([lat, lng], { icon: busIcon }).addTo(map);
+        map.setView([lat, lng], 16);
+        hasCentered = true;
+      } else {
+        busMarker.setLatLng([lat, lng]);
+        if (!hasCentered) {
+          map.panTo([lat, lng]);
           hasCentered = true;
-        } else {
-          busMarker.setLatLng([lat, lng]);
-          if (!hasCentered) {
-            map.panTo([lat, lng]);
-          }
         }
-
-      } catch (err) {
-        console.error('Error fetching live location:', err);
       }
     }
 
-    // Initial call & poll every 4 seconds for real-time motion
+    // Run first update immediately, then poll every 4 seconds
     updateBusLocation();
     setInterval(updateBusLocation, 4000);
   </script>
